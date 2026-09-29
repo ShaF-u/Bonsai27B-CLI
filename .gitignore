@@ -1,0 +1,8 @@
+﻿/models/
+/runtime/
+/downloads/
+/logs/
+*.log
+*.part
+.env
+.env.*
