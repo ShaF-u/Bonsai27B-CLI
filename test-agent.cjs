@@ -1,5 +1,5 @@
 ﻿const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {Workspace,run,detectEditors,parseAction,buildCommand,summarizeBuild}=require('./agent-core.cjs');
+const {Workspace,run,detectEditors,parseAction,buildCommand,summarizeBuild,createProject}=require('./agent-core.cjs');
 test('workspace edit, backup, traversal, unique replacement',()=>{
  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'bonsai-test-'));
  try{
@@ -93,5 +93,33 @@ test('MSBuild build action compiles, reports errors, and msbuild is on PATH',asy
   const lines=summarizeBuild(await run(buildCommand(editors,path.join(tmp,'Build.proj')).command,tmp,300000,toolPath),tmp).errorLines;
   assert.equal(lines[0].file,'Hello.cs');assert.match(lines[0].text,/int x=/);
   assert.equal((await run('msbuild -version -nologo',tmp,60000,toolPath)).exitCode,0);
+ }finally{fs.rmSync(tmp,{recursive:true,force:true});}
+});
+
+test('new_project creates Visual Studio solutions that build and run',async()=>{
+ const editors=detectEditors();
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'bonsai project '));
+ try{
+  const root=path.join(tmp,'work');fs.mkdirSync(root);
+  const ws=new Workspace(root,path.join(tmp,'b'));
+  const toolPath=[path.dirname(editors.msbuild)];
+  for(const [template,expected] of [['console',/Hello, World!/],['cpp-console',/Hello, World!/],['winforms'],['cpp-windows'],['wpf']]) {
+   const name='App_'+template.replace('-','_');
+   const created=await createProject(ws,editors,{template,name,path:'apps'});
+   assert.equal(created.solution,path.join('apps',name,name+'.sln'));
+   const build=summarizeBuild(await run(buildCommand(editors,path.join(root,created.solution)).command,root,600000,toolPath),root);
+   assert.ok(build.succeeded,template+' '+JSON.stringify(build));
+   assert.ok(fs.existsSync(path.join(root,created.debugExecutable)),template+' '+created.debugExecutable);
+   if(expected)assert.match((await run('& '+JSON.stringify(path.join(root,created.debugExecutable)),root)).output,expected);
+  }
+  const lib=await createProject(ws,editors,{template:'classlib',name:'Core',solution:path.join('apps','App_console','App_console.sln')});
+  assert.equal(lib.debugExecutable,undefined);
+  assert.match(fs.readFileSync(path.join(root,'apps','App_console','App_console.sln'),'utf8'),/Core\.csproj/);
+  await assert.rejects(createProject(ws,editors,{template:'console',name:'App_console',path:'apps'}),/already exists/);
+  await assert.rejects(createProject(ws,editors,{template:'console',name:'bad name'}),/identifier/);
+  await assert.rejects(createProject(ws,editors,{template:'unknown',name:'X'}),/template must be/);
+  await assert.rejects(createProject(ws,{},{template:'console',name:'X'}),/\.NET SDK not found/);
+  await assert.rejects(createProject(ws,{},{template:'cpp-console',name:'X'}),/C\+\+ tools not found/);
+  await assert.rejects(createProject(ws,editors,{template:'console',name:'X',path:'../outside'}),/Outside workspace/);
  }finally{fs.rmSync(tmp,{recursive:true,force:true});}
 });

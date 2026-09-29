@@ -23,6 +23,16 @@ PowerShellでの例:
 - ビルドも実行前にyで許可が必要です（-TrustCommandsで省略）。コマンド内では msbuild をそのまま使えます。
 - 同じ操作を変化なしで繰り返した場合は実行せずに別の方法を促し、4回続くと停止して指示を待ちます。
 
+Visual Studio 2022のプロジェクト作成（new_project）:
+- 「VS2022のC++コンソールアプリをFizzBuzzという名前で作って、FizzBuzzを書いてビルドして実行して」
+- 「C#のWPFアプリをMyToolという名前で作って」
+- 「このslnにCoreという名前のC#クラスライブラリを追加して」
+- 作れる種類: C# コンソール / クラスライブラリ / Windowsフォーム / WPF、C++ コンソール / Windowsデスクトップ（ウィンドウ表示）
+- Visual Studioの「新しいプロジェクト」と同じ構成（フォルダ\名前\名前.sln と フォルダ\名前\名前\プロジェクト）で作成し、そのままVisual Studioで開けます。
+- プロジェクトファイル（.sln/.csproj/.vcxproj）はBonsaiに手書きさせず、ツール側の検証済みテンプレートから作ります。
+- C++はx64のDebug/Release、C++20、/utf-8（日本語ソース可）。実行ファイルは 名前\bin\x64\Debug\名前.exe に出力されます。
+- C++プロジェクトを既存のslnへ追加する操作は未対応です（新しいslnとして作成します）。
+
 指示例:
 - 「Assetsを調べて、矢印キーで移動するC#スクリプトを追加して」
 - 「この.slnをビルドして、コンパイルエラーを直して」
@@ -58,8 +68,15 @@ Unityは実際のプロジェクトと同じバージョンを指定してくだ
 サーバーは127.0.0.1の空きポートと一時キーで起動し、コード作業モード終了時に停止します。
 GPUメモリ不足の場合は -Context 8192 または -Cpu を指定してください。
 
-従来の配布ZIPは通常チャット用です。コード作業モードを別PCへ渡すには
-agent.ps1、agent.cjs、agent-core.cjs、04-code.bat、CODE-MODE-ja.mdも同じフォルダにコピーしてください。
+## 別PCで使う場合
+Bonsai27B-CLI-installer.zip にコード作業モードも含まれています。展開して00-install.batを実行した後、04-code.batを使えます。
+別PCで必要なもの:
+- Node.js 22以上（https://nodejs.org/ のLTS版）
+- Visual Studio 2022（Community可）またはBuild Tools 2022。Visual Studio Installerで次のワークロードを入れてください。
+  - C#を使う: 「.NET デスクトップ開発」（.NET SDKも入ります）
+  - C++を使う: 「C++ によるデスクトップ開発」
+- Visual Studio・.NET SDK・C++ツールはインストール場所が標準以外でも自動検出します。見つからない場合、Bonsaiは不足しているものを報告して止まります。
+- .NET SDKの場所は BONSAI_DOTNET で指定することもできます。
 
 参照:
 - https://github.com/ggml-org/llama.cpp/blob/master/examples/json_schema_pydantic_example.py

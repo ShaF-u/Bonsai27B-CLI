@@ -154,7 +154,13 @@ function detectEditors() {
   const add=(key,p)=>{if(p&&fs.existsSync(p))editors[key]=p;};
   const ide=vs.find(x=>x.productId!=='Microsoft.VisualStudio.Product.BuildTools');
   if(ide)add('visualstudio',ide.productPath);
-  for(const v of vs)if(!editors.msbuild)add('msbuild',path.join(v.installationPath,'MSBuild','Current','Bin','MSBuild.exe'));
+  // Prefer an instance with the C++ workload so .vcxproj builds work (Build Tools and IDE may both exist).
+  const hasCpp=v=>fs.existsSync(path.join(v.installationPath,'VC','Tools','MSVC'));
+  for(const v of [...vs.filter(hasCpp),...vs.filter(v=>!hasCpp(v))])if(!editors.msbuild)add('msbuild',path.join(v.installationPath,'MSBuild','Current','Bin','MSBuild.exe'));
+  if(vs.some(hasCpp))editors.cppToolset='v143';
+  const dotnet=(env.Path||env.PATH||'').split(path.delimiter).map(d=>path.join(d.replace(/"/g,''),'dotnet.exe'))
+    .concat(path.join(env.ProgramFiles||'C:\\Program Files','dotnet','dotnet.exe')).find(p=>{try{return fs.statSync(p).isFile();}catch{return false;}});
+  if(dotnet)editors.dotnet=dotnet;
   add('vscode',path.join(env.LOCALAPPDATA||'','Programs','Microsoft VS Code','Code.exe'));
   if(!editors.vscode)add('vscode',path.join(env.ProgramFiles||'C:\\Program Files','Microsoft VS Code','Code.exe'));
   const unityRoot=path.join(env.ProgramFiles||'C:\\Program Files','Unity','Hub','Editor');
@@ -187,7 +193,7 @@ function detectEditors() {
       .filter(x=>fs.existsSync(x.path)).sort((a,b)=>b.version.localeCompare(a.version,undefined,{numeric:true}));
     if(versions.length){editors.unrealVersions=versions;editors.unreal=versions[0].path;}
   }catch {}
-  for(const key of ['visualstudio','vscode','unity','unreal','msbuild'])
+  for(const key of ['visualstudio','vscode','unity','unreal','msbuild','dotnet'])
     if(env['BONSAI_'+key.toUpperCase()])add(key,env['BONSAI_'+key.toUpperCase()]);
   return editors;
 }
@@ -269,4 +275,199 @@ function openEditor(editors, editor, target) {
   const child=cp.spawn(executable,args,{detached:true,stdio:'ignore',windowsHide:false});
   return new Promise((resolve,reject)=>{child.once('error',reject);child.once('spawn',()=>{child.unref();resolve({opened:editor,path:target});});});
 }
-module.exports={Workspace,run,detectEditors,openEditor,parseAction,buildCommand,summarizeBuild};
+// Project files are generated from fixed templates because small models cannot write MSBuild XML reliably.
+const DOTNET_TEMPLATES={console:'console',classlib:'classlib',winforms:'winforms',wpf:'wpf'};
+const CPP_TEMPLATES={'cpp-console':'Console','cpp-windows':'Windows'};
+function execFile(file,args,cwd) {
+  return new Promise((resolve,reject)=>cp.execFile(file,args,{cwd,windowsHide:true,timeout:180000,
+    env:{...process.env,DOTNET_NOLOGO:'1',DOTNET_CLI_TELEMETRY_OPTOUT:'1',DOTNET_SKIP_FIRST_TIME_EXPERIENCE:'1'}},
+    (error,stdout,stderr)=>error?reject(Error((stdout+stderr).trim().slice(-3000)||error.message)):resolve(stdout)));
+}
+const guid=()=>'{'+require('node:crypto').randomUUID().toUpperCase()+'}';
+async function createProject(ws, editors, {template,name,path:folder='.',solution}) {
+  if(!DOTNET_TEMPLATES[template]&&!CPP_TEMPLATES[template])
+    throw Error('template must be one of: '+[...Object.keys(DOTNET_TEMPLATES),...Object.keys(CPP_TEMPLATES)].join(', '));
+  if(DOTNET_TEMPLATES[template]&&!editors.dotnet)
+    throw Error('.NET SDK not found. Ask the user to install the ".NET desktop development" workload in Visual Studio Installer (or the .NET SDK), or set BONSAI_DOTNET.');
+  if(CPP_TEMPLATES[template]&&!editors.cppToolset)
+    throw Error('Visual Studio 2022 C++ tools not found. Ask the user to install the "Desktop development with C++" workload in Visual Studio Installer.');
+  if(typeof name!=='string'||!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name))throw Error('name must be an ASCII identifier such as MyApp.');
+  let slnFile,projectDir;
+  if(solution) {
+    slnFile=ws.resolve(solution);
+    if(path.extname(slnFile).toLowerCase()!=='.sln'||!fs.existsSync(slnFile))throw Error('solution must be an existing .sln file.');
+    if(CPP_TEMPLATES[template])throw Error('Adding a C++ project to an existing solution is not supported; create a new solution.');
+    projectDir=path.join(path.dirname(slnFile),name);
+  } else {
+    // Same layout as Visual Studio: <folder>/<Name>/<Name>.sln and <folder>/<Name>/<Name>/<project>
+    const solutionDir=ws.resolve(path.join(folder,name));
+    if(fs.existsSync(solutionDir))throw Error('Folder already exists: '+path.relative(ws.root,solutionDir));
+    slnFile=path.join(solutionDir,name+'.sln');
+    projectDir=path.join(solutionDir,name);
+  }
+  const rel=p=>path.relative(ws.root,p);
+  ws.resolve(rel(projectDir));
+  if(fs.existsSync(projectDir))throw Error('Folder already exists: '+rel(projectDir));
+  let projectFile,output;
+  if(DOTNET_TEMPLATES[template]) {
+    await execFile(editors.dotnet,['new',DOTNET_TEMPLATES[template],'-n',name,'-o',projectDir,'--no-restore'],ws.root);
+    if(!solution)await execFile(editors.dotnet,['new','sln','-n',name,'-o',path.dirname(slnFile)],ws.root);
+    projectFile=path.join(projectDir,name+'.csproj');
+    await execFile(editors.dotnet,['sln',slnFile,'add',projectFile],ws.root);
+    const framework=/<TargetFramework>([^<]+)</.exec(fs.readFileSync(projectFile,'utf8'));
+    if(template!=='classlib'&&framework)output=rel(path.join(projectDir,'bin','Debug',framework[1],name+'.exe'));
+  } else {
+    const id=guid(),files=cppProject(name,id,CPP_TEMPLATES[template],editors.cppToolset);
+    for(const [file,content] of Object.entries(files))ws.write(rel(path.join(projectDir,file)),content);
+    ws.write(rel(slnFile),cppSolution(name,id));
+    projectFile=path.join(projectDir,name+'.vcxproj');
+    output=rel(path.join(projectDir,'bin','x64','Debug',name+'.exe'));
+  }
+  const files=[];
+  const walk=d=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){if(['bin','obj'].includes(e.name))continue;const p=path.join(d,e.name);e.isDirectory()?walk(p):files.push(rel(p));}};
+  walk(projectDir);
+  return {solution:rel(slnFile),project:rel(projectFile),files,debugExecutable:output,
+    next:'Edit the source files, then use build with path '+rel(slnFile)+'. Do not edit project/solution XML by hand.'};
+}
+function cppProject(name,id,kind,toolset) {
+  const console=kind==='Console';
+  const config=(c,debug)=>`  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='${c}|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>${debug}</UseDebugLibraries>
+    <PlatformToolset>${toolset}</PlatformToolset>${debug?'':'\n    <WholeProgramOptimization>true</WholeProgramOptimization>'}
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+`;
+  const definitions=(c,debug)=>`  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='${c}|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>${debug?'':'\n      <FunctionLevelLinking>true</FunctionLevelLinking>\n      <IntrinsicFunctions>true</IntrinsicFunctions>'}
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>${debug?'_DEBUG':'NDEBUG'};${console?'_CONSOLE':'_WINDOWS'};%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>${console?'Console':'Windows'}</SubSystem>${debug?'':'\n      <EnableCOMDATFolding>true</EnableCOMDATFolding>\n      <OptimizeReferences>true</OptimizeReferences>'}
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+`;
+  const vcxproj=`<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>${id}</ProjectGuid>
+    <RootNamespace>${name}</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\\Microsoft.Cpp.Default.props" />
+${config('Debug',true)}${config('Release',false)}  <Import Project="$(VCTargetsPath)\\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)bin\\$(Platform)\\$(Configuration)\\</OutDir>
+    <IntDir>$(ProjectDir)obj\\$(Platform)\\$(Configuration)\\</IntDir>
+  </PropertyGroup>
+${definitions('Debug',true)}${definitions('Release',false)}  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\\Microsoft.Cpp.targets" />
+</Project>
+`;
+  const filters=`<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>${guid()}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>${guid()}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
+`;
+  const main=console?`#include <iostream>
+
+int main()
+{
+    std::cout << "Hello, World!\\n";
+    return 0;
+}
+`:`#include <windows.h>
+
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        TextOutW(hdc, 20, 20, L"Hello, World!", 13);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
+{
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = WindowProc;
+    wc.hInstance = hInstance;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.lpszClassName = L"${name}Window";
+    RegisterClassW(&wc);
+
+    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"${name}", WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, nullptr, nullptr, hInstance, nullptr);
+    if (!hwnd) return 0;
+    ShowWindow(hwnd, nCmdShow);
+
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0)
+    {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    return static_cast<int>(msg.wParam);
+}
+`;
+  return {[name+'.vcxproj']:vcxproj,[name+'.vcxproj.filters']:filters,'main.cpp':main};
+}
+function cppSolution(name,id) {
+  const lines=['','Microsoft Visual Studio Solution File, Format Version 12.00','# Visual Studio Version 17','VisualStudioVersion = 17.0.31903.59','MinimumVisualStudioVersion = 10.0.40219.1',
+    `Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "${name}", "${name}\\${name}.vcxproj", "${id}"`,'EndProject','Global',
+    '\tGlobalSection(SolutionConfigurationPlatforms) = preSolution','\t\tDebug|x64 = Debug|x64','\t\tRelease|x64 = Release|x64','\tEndGlobalSection',
+    '\tGlobalSection(ProjectConfigurationPlatforms) = postSolution',
+    ...['Debug','Release'].flatMap(c=>[`\t\t${id}.${c}|x64.ActiveCfg = ${c}|x64`,`\t\t${id}.${c}|x64.Build.0 = ${c}|x64`]),'\tEndGlobalSection',
+    '\tGlobalSection(SolutionProperties) = preSolution','\t\tHideSolutionNode = FALSE','\tEndGlobalSection',
+    '\tGlobalSection(ExtensibilityGlobals) = postSolution','\t\tSolutionGuid = '+guid(),'\tEndGlobalSection','EndGlobal',''];
+  return '﻿'+lines.join('\r\n');
+}
+module.exports={Workspace,run,detectEditors,openEditor,parseAction,buildCommand,summarizeBuild,createProject};

@@ -19,7 +19,8 @@ SHA256でモデルと配布ZIPを検証し、実行環境の版を固定して�
 - 01-chat.bat: GPUを自動判定してターミナル内で会話。
 - 02-chat-cpu.bat: CPUを指定して会話。GPUメモリ不足時などに使用。
 - 03-test.bat: 日本語の質問と計算による動作確認。
-- install.ps1 / chat.ps1 / common.ps1: バッチが呼び出す本体。まとめてコピーしてください。
+- 04-code.bat: コード作業モード。Visual Studio 2022のプロジェクト作成、コードの書き込み、ビルドを日本語で指示できます（詳細は CODE-MODE-ja.md）。
+- install.ps1 / chat.ps1 / common.ps1 / agent.ps1 / agent.cjs / agent-core.cjs: バッチが呼び出す本体。まとめてコピーしてください。
 
 NVIDIAドライバーがCUDA 12.4以上に対応し、先頭GPUのVRAMが約6GB以上ならCUDAを選びます。
 それ以外（AMD/Intelを含む）はCPUを使用します。このセットでAMD/IntelのGPU加速は設定しません。

@@ -19,6 +19,7 @@ Visual C++ランタイムが不足している場合はMicrosoftのインスト�
 | `01-chat.bat` | NVIDIA GPUを自動判定して対話。条件を満たさなければCPUを使用 |
 | `02-chat-cpu.bat` | CPUを明示して起動 |
 | `03-test.bat` | 日本語と計算の動作確認 |
+| `04-code.bat` | コード作業モード（VS2022プロジェクト作成・コード編集・ビルド。`CODE-MODE-ja.md` 参照） |
 
 ```powershell
 .\01-chat.bat -NoThinking
