@@ -1,23 +1,34 @@
-﻿param([string]$SeedDirectory)
+﻿param([string]$SeedDirectory,[ValidateSet('auto','bonsai','huihui','both')][string]$Model='auto')
 . (Join-Path $PSScriptRoot 'common.ps1')
 try {
+    $selectedModels=@(Select-BonsaiModels -Purpose install -Choice $Model)
+    if ($selectedModels.Count -eq 0) { Write-Host 'キャンセルしました。'; exit 0 }
     $hardware=Get-BonsaiHardware
     Write-Host "Bonsai 27B installer / backend: $($hardware.Backend) / VRAM: $($hardware.VramMiB) MiB"
     $modelDir=Join-Path $PSScriptRoot 'models'
     $downloads=Join-Path $PSScriptRoot 'downloads'
     New-Item -ItemType Directory -Path $modelDir,$downloads -Force | Out-Null
     Ensure-VcRuntime
-    $model=Join-Path $modelDir $ModelName
-    if ($SeedDirectory -and -not (Test-Path -LiteralPath $model)) {
-        $seed=Join-Path $SeedDirectory "models\gguf\27B\$ModelName"
-        if (Test-Path -LiteralPath $seed) {
-            Write-Host 'Copying existing model (no download needed)...'
-            Copy-Item -LiteralPath $seed -Destination ($model+'.part')
-            Assert-Hash ($model+'.part') $ModelHash
-            Move-Item -LiteralPath ($model+'.part') -Destination $model
+    foreach ($spec in $selectedModels) {
+        $modelPath=Join-Path $modelDir $spec.File
+        Write-Host "導入するモデル: $($spec.Label)" -ForegroundColor Cyan
+        Write-Host $spec.Description
+        if ($SeedDirectory -and -not (Test-Path -LiteralPath $modelPath)) {
+            $candidates=@(
+                (Join-Path $SeedDirectory $spec.File),
+                (Join-Path $SeedDirectory "models\$($spec.File)"),
+                (Join-Path $SeedDirectory "models\gguf\27B\$($spec.File)")
+            )
+            $seed=$candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+            if ($seed) {
+                Write-Host '既存モデルをコピーして検証しています...'
+                Copy-Item -LiteralPath $seed -Destination ($modelPath+'.part')
+                Assert-Hash ($modelPath+'.part') $spec.Hash
+                Move-Item -LiteralPath ($modelPath+'.part') -Destination $modelPath
+            }
         }
+        Get-CheckedDownload "https://huggingface.co/$($spec.Repo)/resolve/$($spec.Revision)/$($spec.File)" $modelPath $spec.Hash
     }
-    Get-CheckedDownload "https://huggingface.co/prism-ml/Bonsai-27B-gguf/resolve/f10afb355f104535e3e3e98cf7ab7795c72bd292/$ModelName" $model $ModelHash
     $assets=@(
         @{Name="llama-$Release-bin-win-cpu-x64.zip";Hash='d0b3016c9cc4bc1385de68be034adee570277ba952dd94292ba3888b7f18cc44';Backend='cpu'}
     )
@@ -30,7 +41,7 @@ try {
         Get-CheckedDownload "https://github.com/PrismML-Eng/llama.cpp/releases/download/$Release/$($asset.Name)" $zip $asset.Hash
         $dest=Join-Path $PSScriptRoot "runtime\$($asset.Backend)"
         New-Item -ItemType Directory -Path $dest -Force | Out-Null
-        Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+        Expand-BonsaiRuntime -Archive $zip -Destination $dest
     }
     $exe=Join-Path $PSScriptRoot "runtime\$($hardware.Backend)\llama-cli.exe"
     & $exe --version

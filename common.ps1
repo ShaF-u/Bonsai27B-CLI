@@ -1,8 +1,5 @@
 ﻿$ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$script:ModelName = 'Bonsai-27B-Q1_0.gguf'
-$script:ModelHash = '17ef842e47450caeb8eaa3ebfbbab5d2f2278b62b79be107985fb69a2f819aa0'
-$script:ModelSize = 3803452480L
 $script:Release = 'prism-b10743-adfffbe'
 function Get-BonsaiHardware {
     if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_IDENTIFIER -match 'ARM') { throw 'This package requires x64 Windows 10/11.' }
@@ -55,4 +52,94 @@ function Ensure-VcRuntime {
     $setup=Start-Process -FilePath $redist -ArgumentList '/install','/passive','/norestart' -Wait -PassThru -WindowStyle Hidden
     if ($setup.ExitCode -eq 3010) { throw 'Visual C++ runtime installed. Restart Windows, then run 00-install.bat again.' }
     if ($setup.ExitCode -ne 0) { throw "Visual C++ runtime setup failed (exit $($setup.ExitCode))." }
+}
+
+function Get-BonsaiModels {
+    @(
+        [pscustomobject]@{
+            Id='bonsai'; Label='Bonsai 27B / 軽量・高速（従来モデル）'
+            Description='Qwen3.6系・1-bit Q1_0・約3.8GB。軽さ重視の標準版。'
+            File='Bonsai-27B-Q1_0.gguf'; Size=3803452480L
+            Hash='17ef842e47450caeb8eaa3ebfbbab5d2f2278b62b79be107985fb69a2f819aa0'
+            Repo='prism-ml/Bonsai-27B-gguf'; Revision='f10afb355f104535e3e3e98cf7ab7795c72bd292'
+            MinVramMiB=6000
+        }
+        [pscustomobject]@{
+            Id='huihui'; Label='Huihui Qwen3.8 27B / 拒否低減版（新しいベース）'
+            Description='Bonsai 2系・Ternary PQ2_0・約7.7GB。拒否を減らす加工あり。品質・速度は用途によります。'
+            File='Huihui-Qwen3.8-27B-abliterated-Ternary-Bonsai-PQ2_0.gguf'; Size=7704693216L
+            Hash='0de67be7b5256c20971f44e514d87ec7fa81ad4f8d8fcf151644009f74f3a5cf'
+            Repo='huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF'; Revision='3f101cd22b7999228bbd5d79a33975414eb9758b'
+            MinVramMiB=10000
+        }
+    )
+}
+function Test-BonsaiInstalled($Spec) {
+    $file=Join-Path $PSScriptRoot "models\$($Spec.File)"
+    return ((Test-Path -LiteralPath $file -PathType Leaf) -and (Get-Item -LiteralPath $file).Length -eq $Spec.Size)
+}
+function Select-BonsaiModels {
+    param([ValidateSet('install','chat')][string]$Purpose,[ValidateSet('auto','bonsai','huihui','both')][string]$Choice='auto')
+    $catalog=@(Get-BonsaiModels)
+    if ($Choice -ne 'auto') {
+        if ($Choice -eq 'both') {
+            if ($Purpose -ne 'install') { throw '起動時は bonsai または huihui を指定してください。' }
+            return $catalog
+        }
+        $selected=$catalog | Where-Object Id -eq $Choice
+        if ($Purpose -eq 'chat' -and -not (Test-BonsaiInstalled $selected)) { throw "$($selected.Label) は未導入です。00-install.bat -Model $Choice を実行してください。" }
+        return $selected
+    }
+    Write-Host ''
+    Write-Host '========== モデル選択 ==========' -ForegroundColor Cyan
+    for ($i=0; $i -lt $catalog.Count; $i++) {
+        $state=if (Test-BonsaiInstalled $catalog[$i]) {'導入済み'} else {'未導入 / 要インストール'}
+        Write-Host "[$($i+1)] $($catalog[$i].Label) [$state]"
+        Write-Host "    $($catalog[$i].Description)"
+    }
+    if ($Purpose -eq 'install') { Write-Host '[3] 両方をインストール（モデル合計 約11.5GB）' }
+    Write-Host '[0] キャンセル'
+    if ($Purpose -eq 'chat') {
+        $installed=@($catalog | Where-Object { Test-BonsaiInstalled $_ })
+        if ($installed.Count -eq 0) { throw 'モデルが未導入です。先に00-install.batを実行してください。' }
+        if ($installed.Count -eq 1) {
+            Write-Host "導入済みのモデルを起動します: $($installed[0].Label)"
+            return $installed[0]
+        }
+    }
+    while ($true) {
+        $answer=Read-Host '番号を入力してEnter'
+        if ($null -eq $answer) { throw '入力がありません。-Model bonsai / huihui を指定してください。' }
+        switch ($answer.Trim()) {
+            '0' { return }
+            '1' { $selected=$catalog[0] }
+            '2' { $selected=$catalog[1] }
+            '3' { if ($Purpose -eq 'install') { return $catalog }; $selected=$null }
+            default { $selected=$null }
+        }
+        if (-not $selected) { Write-Host '表示されている番号を入力してください。'; continue }
+        if ($Purpose -eq 'chat' -and -not (Test-BonsaiInstalled $selected)) { Write-Host 'このモデルは未導入です。00-install.batでインストールしてください。'; continue }
+        return $selected
+    }
+}
+
+function Expand-BonsaiRuntime([string]$Archive,[string]$Destination) {
+    # A running CLI locks DLLs. Reuse an identical installation instead of overwriting it.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip=[IO.Compression.ZipFile]::OpenRead($Archive)
+    $matches=$true
+    try {
+        foreach ($entry in $zip.Entries) {
+            if (-not $entry.Name) { continue }
+            $target=Join-Path $Destination $entry.FullName
+            if (-not (Test-Path -LiteralPath $target -PathType Leaf) -or (Get-Item -LiteralPath $target).Length -ne $entry.Length) { $matches=$false; break }
+            $stream=$entry.Open(); $sha=[Security.Cryptography.SHA256]::Create()
+            try { $expected=[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','') }
+            finally { $stream.Dispose(); $sha.Dispose() }
+            if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $expected) { $matches=$false; break }
+        }
+    } finally { $zip.Dispose() }
+    if ($matches) { Write-Host '実行環境は導入済みです（ファイル一致を確認）。'; return }
+    try { Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force }
+    catch { throw "実行環境を更新できません。起動中のCLIを終了して00-install.batを再実行してください。詳細: $($_.Exception.Message)" }
 }
