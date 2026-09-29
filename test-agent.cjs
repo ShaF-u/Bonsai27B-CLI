@@ -1,0 +1,97 @@
+﻿const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const {Workspace,run,detectEditors,parseAction,buildCommand,summarizeBuild}=require('./agent-core.cjs');
+test('workspace edit, backup, traversal, unique replacement',()=>{
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'bonsai-test-'));
+ try{
+ const root=path.join(tmp,'project');fs.mkdirSync(root);
+ const ws=new Workspace(root,path.join(tmp,'backups'));
+ ws.write('Assets/Test.cs','// 日本語\nold');
+ const saved=ws.replace('Assets/Test.cs','old','new');
+ assert.equal(ws.read('Assets/Test.cs'),'// 日本語\nnew');
+ assert.equal(fs.readFileSync(saved.backup,'utf8'),'// 日本語\nold');
+ assert.throws(()=>ws.replace('Assets/Test.cs','missing','x'));
+ for(const bad of ['../outside','C:\\outside','.git/config','file:stream','CON','a.'])assert.throws(()=>ws.write(bad,'x'));
+ fs.mkdirSync(path.join(tmp,'outside'));
+ fs.symlinkSync(path.join(tmp,'outside'),path.join(root,'linked'),'junction');
+ assert.throws(()=>ws.write('linked/file','x'));
+ ws.write('repeat','x x');assert.throws(()=>ws.replace('repeat','x','z'));
+ assert.equal(ws.list()[0].name,'Assets');
+ }finally{fs.rmSync(tmp,{recursive:true,force:true});}
+});
+test('command output and failing exit code are preserved',async()=>{
+ const result=await run("Write-Output 'hello'; exit 7",__dirname);
+ assert.equal(result.exitCode,7);assert.match(result.output,/hello/);
+ assert.match((await run("Write-Output '日本語'",__dirname)).output,/日本語/);
+ const parseError=await run('cd x && y',__dirname);
+ assert.notEqual(parseError.exitCode,0);assert.doesNotMatch(parseError.output,/�/);
+});
+test('Visual Studio 2022 tools are detected on this PC',()=>{
+ const editors=detectEditors();assert.ok(editors.visualstudio);assert.ok(editors.msbuild);
+});
+
+test('folder creation, copy, rename, recoverable deletion and rejection',()=>{
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'bonsai-operations-'));
+ try {
+  const root=path.join(tmp,'project');fs.mkdirSync(root);
+  const ws=new Workspace(root,path.join(tmp,'backup'));
+  ws.mkdir('empty/nested');assert.ok(fs.statSync(path.join(root,'empty/nested')).isDirectory());
+  ws.write('src/code.txt','日本語');
+  ws.transfer('src','copy',true);assert.equal(ws.read('copy/code.txt'),'日本語');
+  ws.transfer('copy','renamed');assert.ok(!fs.existsSync(path.join(root,'copy')));
+  assert.throws(()=>ws.transfer('src','renamed'));
+  assert.throws(()=>ws.transfer('src','src/nested',true));
+  assert.throws(()=>ws.trash('.'));
+  const deleted=ws.trash('renamed');
+  assert.equal(fs.readFileSync(path.join(deleted.backup,'code.txt'),'utf8'),'日本語');
+  assert.ok(!fs.existsSync(path.join(root,'renamed')));
+  fs.mkdirSync(path.join(root,'src','.git'));
+  assert.throws(()=>ws.trash('src'));
+ }finally{fs.rmSync(tmp,{recursive:true,force:true});}
+});
+
+test('model output repair: raw newlines, fences, prose',()=>{
+ assert.equal(parseAction('{"action":"write","content":"a\nb"}').content,'a\nb');
+ assert.equal(parseAction('修正します。\n```json\n{"action":"read","path":"x"}\n```').path,'x');
+ assert.equal(parseAction('{"action":"write","content":"say \\"hi\\"\n"}').content,'say "hi"\n');
+ assert.equal(parseAction('{"action":"write","path":"a","content":"x\\n"').content,'x\n');
+ assert.throws(()=>parseAction('no json here'));
+ assert.throws(()=>parseAction('{"path":"x"}'));
+});
+
+test('identical replacement is rejected without writing',()=>{
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'bonsai-noop-'));
+ try{
+  const root=path.join(tmp,'p');fs.mkdirSync(root);
+  const ws=new Workspace(root,path.join(tmp,'b'));
+  ws.write('a.txt','same');
+  assert.throws(()=>ws.replace('a.txt','same','same'),/identical/);
+  ws.write('b.txt','x\nx');assert.throws(()=>ws.replace('b.txt','x','y'),/occurs 2 times/);
+  assert.throws(()=>ws.replace('b.txt','z','y'),/not found/);
+  assert.equal(fs.readdirSync(path.join(tmp,'b')).length,0);
+ }finally{fs.rmSync(tmp,{recursive:true,force:true});}
+});
+
+test('build summary keeps compiler errors only',()=>{
+ const r=summarizeBuild({exitCode:1,output:'start\r\nHello.cs(3,5): error CS1002: ; expected [x.proj]\r\nHello.cs(3,5): error CS1002: ; expected [x.proj]\r\nfoo.cs(1,1): warning CS0168: unused\r\ndone'});
+ assert.equal(r.succeeded,false);assert.deepEqual(r.errors,['Hello.cs(3,5): error CS1002: ; expected [x.proj]']);assert.equal(r.warningCount,1);
+ assert.throws(()=>buildCommand({},path.join(os.tmpdir(),'readme.txt')),/Unsupported/);
+});
+
+test('MSBuild build action compiles, reports errors, and msbuild is on PATH',async()=>{
+ const editors=detectEditors();
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'bonsai-build-'));
+ try{
+  fs.writeFileSync(path.join(tmp,'Build.proj'),'<Project><Target Name="Build"><Csc Sources="Hello.cs" OutputAssembly="Hello.exe" TargetType="Exe"/></Target></Project>');
+  fs.writeFileSync(path.join(tmp,'Hello.cs'),'class P{static void Main(){System.Console.WriteLine("Bonsai build OK");}}');
+  const toolPath=[path.dirname(editors.msbuild)];
+  const ok=summarizeBuild(await run(buildCommand(editors,path.join(tmp,'Build.proj')).command,tmp,300000,toolPath));
+  assert.ok(ok.succeeded,JSON.stringify(ok));
+  assert.match((await run('./Hello.exe',tmp)).output,/Bonsai build OK/);
+  fs.writeFileSync(path.join(tmp,'Hello.cs'),'class P{static void Main(){int x=}}');
+  const bad=summarizeBuild(await run(buildCommand(editors,path.join(tmp,'Build.proj')).command,tmp,300000,toolPath));
+  assert.equal(bad.succeeded,false);assert.match(bad.errors[0],/Hello\.cs\(\d+,\d+\): error CS/);
+  const lines=summarizeBuild(await run(buildCommand(editors,path.join(tmp,'Build.proj')).command,tmp,300000,toolPath),tmp).errorLines;
+  assert.equal(lines[0].file,'Hello.cs');assert.match(lines[0].text,/int x=/);
+  assert.equal((await run('msbuild -version -nologo',tmp,60000,toolPath)).exitCode,0);
+ }finally{fs.rmSync(tmp,{recursive:true,force:true});}
+});
