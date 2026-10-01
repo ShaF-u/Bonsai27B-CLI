@@ -18,6 +18,7 @@ try {
     if ([int]($nodeVersion.Split('.')[0]) -lt 22) { throw 'Node.js 22以上が必要です。' }
     if (-not $Workspace) { $Workspace=$env:BONSAI_DEFAULT_WORKSPACE }
     if (-not $Workspace) { $Workspace=Read-Host '作業するプロジェクトのフォルダを入力' }
+    if (-not $Workspace) { throw '作業フォルダが指定されていません。04-code.batをプロジェクトのフォルダにコピーして起動するか、-Workspace を指定してください。' }
     $Workspace=(Resolve-Path -LiteralPath $Workspace -ErrorAction Stop).Path
     if (-not (Test-Path -LiteralPath $Workspace -PathType Container)) { throw '作業フォルダがありません。先にフォルダを作成してください。' }
     $spec=Select-BonsaiModels -Purpose chat -Choice $Model

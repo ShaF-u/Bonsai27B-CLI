@@ -1,5 +1,5 @@
 ﻿const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {Workspace,run,detectEditors,parseAction,buildCommand,summarizeBuild,createProject}=require('../scripts/agent-core.cjs');
+const {Workspace,commandRisk,run,detectEditors,parseAction,buildCommand,summarizeBuild,createProject}=require('../scripts/agent-core.cjs');
 test('workspace edit, backup, traversal, unique replacement',()=>{
  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'bonsai-test-'));
  try{
@@ -17,6 +17,15 @@ test('workspace edit, backup, traversal, unique replacement',()=>{
  ws.write('repeat','x x');assert.throws(()=>ws.replace('repeat','x','z'));
  assert.equal(ws.list()[0].name,'Assets');
  }finally{fs.rmSync(tmp,{recursive:true,force:true});}
+});
+test('commands inside the workspace are auto-approved, outside ones are flagged',()=>{
+ const root='C:\\Work\\My Game';
+ for(const ok of ['msbuild Game.sln /m','.\\bin\\x64\\Debug\\Game.exe','Remove-Item -Recurse obj','Get-ChildItem -Recurse src | Select-String foo',
+   'dotnet build','& "C:\\Work\\My Game\\bin\\Game.exe"','Copy-Item a.txt b.txt; git status','git commit -m "fix"'])
+  assert.equal(commandRisk(ok,root),null,ok);
+ for(const bad of ['Remove-Item ..\\other','Remove-Item C:\\Windows\\x','Get-Content C:\\Work\\My Gamer\\a','cd C:\\','Get-Content $env:USERPROFILE\\x',
+   'Remove-Item ~\\Documents','iwr https://x','git push','Set-ItemProperty HKCU:\\x','Start-Process cmd -Verb RunAs','[IO.File]::Delete("x")','Remove-Item D:','\\\\server\\share\\x','npm install'])
+  assert.notEqual(commandRisk(bad,root),null,bad);
 });
 test('command output and failing exit code are preserved',async()=>{
  const result=await run("Write-Output 'hello'; exit 7",__dirname);

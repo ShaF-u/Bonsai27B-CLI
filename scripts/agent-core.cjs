@@ -127,6 +127,28 @@ function escapeControls(text) {
   }
   return out;
 }
+// Commands are auto-approved inside the workspace; anything that looks like it reaches outside asks the user.
+// This is a heuristic, not a sandbox: PowerShell can always be written to escape a text check.
+const RISKY=[
+  [/(^|[\s'"`(=,;|])\.\.([\\/]|$|[\s'"`;|)])/,'parent folder (..)'],
+  [/\\\\[^\\\s]/,'network path'],
+  [/(^|[\s'"`(=,;|])~([\\/]|$|[\s'"`;|)])|\$home\b|\$env:|\benv:|\[environment\]/i,'home folder or environment'],
+  [/\bhk(lm|cu|cr|u|cc):|\bregistry::|\breg(\.exe)?\s+(add|delete|import|copy)/i,'registry'],
+  [/\b(invoke-webrequest|iwr|invoke-restmethod|irm|start-bitstransfer|curl|wget|net\.webclient|net\.http|ssh|scp|ftp|send-mailmessage|new-pssession|enter-pssession|invoke-command)\b|\bgit\s+(push|clone|fetch|pull)\b|\b(npm|pip|winget|choco|scoop|dotnet\s+tool|install-module|install-package)\b/i,'network or install'],
+  [/-verb\s+runas|\bset-executionpolicy\b|\b(shutdown|restart-computer|stop-computer|format-volume|clear-disk|bcdedit|takeown|icacls|schtasks|sc(\.exe)?\s+(create|delete|config))\b|\b(new|set|remove)-(service|scheduledtask|localuser|itemproperty)\b/i,'system change'],
+  [/\b(set-location|push-location|sl|cd|chdir|pushd)\b|\[(system\.)?io\.|\bnew-psdrive\b|\bsubst\b/i,'changes folder or uses .NET file APIs'],
+];
+function commandRisk(command, root) {
+  for(const [pattern,reason] of RISKY)if(pattern.test(command))return reason;
+  const inside=p=>{const full=path.resolve(p).toLowerCase(),base=path.resolve(root).toLowerCase();return full===base||full.startsWith(base+path.sep);};
+  for(const m of command.matchAll(/(?:^|[^A-Za-z0-9_])([A-Za-z]:[\\/][^'"`;|<>\r\n]*|[A-Za-z]:(?=[\s'"`;|]|$))/g)) {
+    // Trailing words after a path with spaces are trimmed until a prefix stays inside the workspace.
+    let p=m[1].trim(),ok=inside(p);
+    while(!ok&&/\s/.test(p)){p=p.replace(/\s+\S*$/,'');ok=inside(p);}
+    if(!ok)return 'path outside the project: '+m[1].trim().split(/\s/)[0];
+  }
+  return null;
+}
 function run(command, cwd, timeout=120000, extraPath=[]) {
   return new Promise(resolve=>{
     const env={...process.env};
@@ -477,4 +499,4 @@ function cppSolution(name,id) {
     '\tGlobalSection(ExtensibilityGlobals) = postSolution','\t\tSolutionGuid = '+guid(),'\tEndGlobalSection','EndGlobal',''];
   return '﻿'+lines.join('\r\n');
 }
-module.exports={Workspace,run,detectEditors,openEditor,parseAction,buildCommand,summarizeBuild,createProject};
+module.exports={Workspace,commandRisk,run,detectEditors,openEditor,parseAction,buildCommand,summarizeBuild,createProject};

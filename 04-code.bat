@@ -7,6 +7,8 @@ if not exist "%ROOT%scripts\common.ps1" for /f "tokens=2,*" %%A in ('reg query "
 if not exist "%ROOT%scripts\common.ps1" (echo Bonsai27B-CLI not found. Run the installer or 00-install.bat first.& pause & exit /b 1)
 rem A copy placed in a project folder works on that folder unless -Workspace is given.
 if /i not "%ROOT%"=="%~dp0" set "BONSAI_DEFAULT_WORKSPACE=%~dp0."
+rem Called from a project folder in a terminal: use the current folder. Only the install folder itself asks.
+if /i "%ROOT%"=="%~dp0" if /i not "%CD%\"=="%ROOT%" set "BONSAI_DEFAULT_WORKSPACE=%CD%"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\agent.ps1" %*
 set "result=%errorlevel%"
 if not "%result%"=="0" pause
