@@ -46,12 +46,19 @@ class Workspace {
       fs.copyFileSync(target,backup);
     }
     fs.mkdirSync(path.dirname(target),{recursive:true});
+    this.assertInside(path.dirname(target));
     fs.writeFileSync(target,content,'utf8');
     return {saved:name,backup};
+  }
+  // Re-check after creation: a junction could appear between resolve() and the write.
+  assertInside(dir) {
+    const real=fs.realpathSync(dir);
+    if(real!==this.root&&!real.startsWith(this.root+path.sep))throw Error('Outside workspace.');
   }
   mkdir(name) {
     const target=this.resolve(name);
     fs.mkdirSync(target,{recursive:true});
+    this.assertInside(target);
     return {created:name};
   }
   tree(target) {

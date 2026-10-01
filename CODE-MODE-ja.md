@@ -51,6 +51,8 @@ Visual Studio 2022のプロジェクト作成（new_project）:
 編集ツールは指定フォルダ内に限定し、.gitとリンク経由の操作を拒否します。
 PowerShellコマンドはユーザー権限で動き、指定フォルダ外にもアクセスできます。
 信頼できるプロジェクトでコマンド確認を省略する場合は -TrustCommands を指定してください。
+注意: -TrustCommands ではAIが生成したコマンドを確認なしで実行するため、ファイル削除など作業フォルダ外への変更も起こり得ます。
+logs フォルダのサーバーログとバックアップは30日を過ぎると次回起動時に削除されます。
 Unity .metaやUnrealのバイナリアセットを直接テキスト編集する用途には使わないでください。
 
 標準の場所で見つからないエディタ、または複数バージョンの選択には環境変数を使います。
@@ -69,7 +71,7 @@ Unityは実際のプロジェクトと同じバージョンを指定してくだ
 GPUメモリ不足の場合は -Context 8192 または -Cpu を指定してください。
 
 ## 別PCで使う場合
-Bonsai27B-CLI-installer.zip にコード作業モードも含まれています。展開して00-install.batを実行した後、04-code.batを使えます。
+インストーラー（Setup.exe）またはGitHubの「Code → Download ZIP」にコード作業モードも含まれています。導入後、04-code.batを使えます。
 別PCで必要なもの:
 - Node.js 22以上（https://nodejs.org/ のLTS版）
 - Visual Studio 2022（Community可）またはBuild Tools 2022。Visual Studio Installerで次のワークロードを入れてください。

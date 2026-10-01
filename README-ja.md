@@ -14,13 +14,26 @@ Visual C++実行ライブラリがない、または古いPCではMicrosoft署�
 SHA256でモデルと配布ZIPを検証し、実行環境の版を固定しています。
 メモリ16GB以上を目安にしてください。CPU実行はGPUより遅くなります。
 
+## インストーラー版
+dist\Bonsai27B-CLI-Setup-*.exe を実行 → 完了画面で「モデルと実行環境をダウンロードする」にチェックしたまま完了。
+既定のインストール先は %LOCALAPPDATA%\Programs\Bonsai27B-CLI（管理者権限不要）。スタートメニューに各機能のショートカットが入ります。
+アンインストールするとダウンロードしたモデルも削除されます。
+インストーラーのビルド: Inno Setup 6 で `ISCC.exe installer\Bonsai27B-CLI.iss`（出力: dist\）。
+
+## .batを作業フォルダにコピーして使う
+各.batは単体でコピーしても動きます（インストール先はレジストリ HKCU\Software\Bonsai27B-CLI から探します）。
+例: ゲームのプロジェクトフォルダに 04-code.bat をコピーしてダブルクリック → そのフォルダを作業フォルダとしてコード作業モードが起動。
+ZIP版の場合は先に一度 00-install.bat を実行してください（インストール先が登録されます）。
+
 ## ファイル
 - 00-install.bat: 必要ファイルの導入・再確認。
 - 01-chat.bat: GPUを自動判定してターミナル内で会話。
 - 02-chat-cpu.bat: CPUを指定して会話。GPUメモリ不足時などに使用。
 - 03-test.bat: 日本語の質問と計算による動作確認。
 - 04-code.bat: コード作業モード。Visual Studio 2022のプロジェクト作成、コードの書き込み、ビルドを日本語で指示できます（詳細は CODE-MODE-ja.md）。
-- install.ps1 / chat.ps1 / common.ps1 / agent.ps1 / agent.cjs / agent-core.cjs: バッチが呼び出す本体。まとめてコピーしてください。
+- scripts\: バッチが呼び出す本体（install.ps1 / chat.ps1 / common.ps1 / agent.ps1 / agent.cjs / agent-core.cjs）。フォルダごとコピーしてください。
+- tests\: 動作確認用（test-prompt.txt、開発者向け `node tests\test-agent.cjs`）。
+- models\ / runtime\ / downloads\ / logs\: 00-install.bat 実行後に自動作成（モデル・実行環境・ダウンロード・ログ）。
 
 NVIDIAドライバーがCUDA 12.4以上に対応し、先頭GPUのVRAMが約6GB以上ならCUDAを選びます。
 それ以外（AMD/Intelを含む）はCPUを使用します。このセットでAMD/IntelのGPU加速は設定しません。
@@ -46,7 +59,7 @@ GPUメモリ不足時は、既存のBonsaiブラウザ版など別のAIを停止
 画像入力はこのセットの対象外（テキストCLI専用）です。
 
 ## 別PCへ渡すもの
-Bonsai27B-CLI-installer.zip はスクリプトと説明書だけの小さい配布セットです。
+Setup.exe（Releases）またはGitHubの「Code → Download ZIP」がスクリプトと説明書だけの小さい配布セットです。
 モデルを含めて持ち運ぶ場合は、インストール済みのこのフォルダ全体をコピーできます。
 元の Desktop\bat\Bonsai-demo への依存はありません。
 

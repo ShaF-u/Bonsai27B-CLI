@@ -1,5 +1,5 @@
 ﻿const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {Workspace,run,detectEditors,parseAction,buildCommand,summarizeBuild,createProject}=require('./agent-core.cjs');
+const {Workspace,run,detectEditors,parseAction,buildCommand,summarizeBuild,createProject}=require('../scripts/agent-core.cjs');
 test('workspace edit, backup, traversal, unique replacement',()=>{
  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'bonsai-test-'));
  try{

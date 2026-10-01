@@ -4,7 +4,7 @@ Bonsai 27B（軽量版）とHuihui Qwen3.8 27B（拒否低減版）を選んで�
 
 ## はじめ方
 
-1. このリポジトリの `Bonsai27B-CLI-installer.zip` をダウンロードして展開します（GitHubの「Code → Download ZIP」でも可）。
+1. Releases の `Bonsai27B-CLI-Setup-*.exe` を実行します（またはGitHubの「Code → Download ZIP」で展開。インストーラーの作成は `ISCC.exe installer\Bonsai27B-CLI.iss`）。
 2. `00-install.bat` を実行し、1（Bonsai）・2（Huihui）・3（両方）から選びます。
 3. `01-chat.bat` を実行し、質問を入力して Enter を押します。
 4. `/exit` で終了します。

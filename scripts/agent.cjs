@@ -5,7 +5,7 @@ const {Workspace,run,detectEditors,openEditor,parseAction,buildCommand,summarize
 async function main() {
   const [root,url,trust='false',maxSteps='24']=process.argv.slice(2);
   const initialPrompt=process.env.BONSAI_AGENT_PROMPT||'';
-  const state=path.join(__dirname,'logs','agent-'+new Date().toISOString().replace(/[:.]/g,'-')+'-'+crypto.randomUUID().slice(0,8));
+  const state=path.join(__dirname,'..','logs','agent-'+new Date().toISOString().replace(/[:.]/g,'-')+'-'+crypto.randomUUID().slice(0,8));
   const ws=new Workspace(root,state),editors=detectEditors(),rl=readline.createInterface({input:process.stdin,output:process.stdout});
   const toolPath=editors.msbuild?[path.dirname(editors.msbuild)]:[];
   const log=(entry)=>fs.appendFileSync(path.join(state,'session.jsonl'),JSON.stringify({time:new Date().toISOString(),...entry})+'\n');

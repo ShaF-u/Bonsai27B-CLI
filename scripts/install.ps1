@@ -5,8 +5,8 @@ try {
     if ($selectedModels.Count -eq 0) { Write-Host 'キャンセルしました。'; exit 0 }
     $hardware=Get-BonsaiHardware
     Write-Host "Bonsai 27B installer / backend: $($hardware.Backend) / VRAM: $($hardware.VramMiB) MiB"
-    $modelDir=Join-Path $PSScriptRoot 'models'
-    $downloads=Join-Path $PSScriptRoot 'downloads'
+    $modelDir=Join-Path $BonsaiRoot 'models'
+    $downloads=Join-Path $BonsaiRoot 'downloads'
     New-Item -ItemType Directory -Path $modelDir,$downloads -Force | Out-Null
     Ensure-VcRuntime
     foreach ($spec in $selectedModels) {
@@ -39,13 +39,17 @@ try {
     foreach ($asset in $assets) {
         $zip=Join-Path $downloads $asset.Name
         Get-CheckedDownload "https://github.com/PrismML-Eng/llama.cpp/releases/download/$Release/$($asset.Name)" $zip $asset.Hash
-        $dest=Join-Path $PSScriptRoot "runtime\$($asset.Backend)"
+        $dest=Join-Path $BonsaiRoot "runtime\$($asset.Backend)"
         New-Item -ItemType Directory -Path $dest -Force | Out-Null
         Expand-BonsaiRuntime -Archive $zip -Destination $dest
     }
-    $exe=Join-Path $PSScriptRoot "runtime\$($hardware.Backend)\llama-cli.exe"
+    $exe=Join-Path $BonsaiRoot "runtime\$($hardware.Backend)\llama-cli.exe"
     & $exe --version
     if ($LASTEXITCODE -ne 0) { throw 'Runtime check failed. Check the Windows/GPU driver or try CPU mode.' }
+    # Lets standalone copies of the .bat files find this installation.
+    $regKey='HKCU:\Software\Bonsai27B-CLI'
+    New-Item -Path $regKey -Force | Out-Null
+    Set-ItemProperty -Path $regKey -Name InstallDir -Value $BonsaiRoot
     Write-Host 'Installation complete. Double-click 01-chat.bat.' -ForegroundColor Green
     exit 0
 } catch { Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }

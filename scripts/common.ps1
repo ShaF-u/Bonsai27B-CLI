@@ -1,21 +1,28 @@
 ﻿$ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $script:Release = 'prism-b10743-adfffbe'
+$script:BonsaiRoot = Split-Path -Parent $PSScriptRoot
 function Get-BonsaiHardware {
     if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_IDENTIFIER -match 'ARM') { throw 'This package requires x64 Windows 10/11.' }
-    $backend='cpu'; $vram=0
+    $backend='cpu'; $vram=0; $gpu=$null
     $smi=Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
     if ($smi) {
         $info=(& $smi.Source 2>$null | Out-String)
-        $memory=@(& $smi.Source --query-gpu=memory.total --format=csv,noheader,nounits 2>$null)
-        if ($memory.Count -gt 0) { $parsed=0; if ([int]::TryParse($memory[0].Trim(),[ref]$parsed)) { $vram=$parsed } }
+        # Use the GPU with the most memory, not just the first one.
+        foreach ($row in @(& $smi.Source --query-gpu=index,memory.total --format=csv,noheader,nounits 2>$null)) {
+            $parts="$row".Split(','); $index=0; $parsed=0
+            if ($parts.Count -eq 2 -and [int]::TryParse($parts[0].Trim(),[ref]$index) -and [int]::TryParse($parts[1].Trim(),[ref]$parsed) -and $parsed -gt $vram) { $vram=$parsed; $gpu=$index }
+        }
         if ($info -match 'CUDA(?:\s+UMD)?\s+Version:\s+(\d+)\.(\d+)') {
             if (([int]$Matches[1] -gt 12 -or ([int]$Matches[1] -eq 12 -and [int]$Matches[2] -ge 4)) -and $vram -ge 6000) { $backend='cuda' }
         }
     }
     $ctx=8192
     if ($backend -eq 'cuda' -and $vram -ge 11000) { $ctx=32768 }
-    [pscustomobject]@{Backend=$backend;VramMiB=$vram;Context=$ctx}
+    [pscustomobject]@{Backend=$backend;VramMiB=$vram;Context=$ctx;GpuIndex=$gpu}
+}
+function Select-BonsaiGpu($Hardware,[string]$Backend) {
+    if ($Backend -eq 'cuda' -and $null -ne $Hardware.GpuIndex) { $env:CUDA_VISIBLE_DEVICES="$($Hardware.GpuIndex)" }
 }
 function Assert-Hash([string]$Path,[string]$Expected) {
     $actual=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
@@ -29,10 +36,15 @@ function Get-CheckedDownload([string]$Url,[string]$Path,[string]$Hash) {
     if ($curl) {
         & $curl.Source --fail --location --retry 5 --retry-delay 3 --connect-timeout 30 --continue-at - --output $partial $Url
         if ($LASTEXITCODE -ne 0) { throw 'Download failed. Run 00-install.bat again to resume.' }
+    } elseif (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+        if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
+        Start-BitsTransfer -Source $Url -Destination $partial -DisplayName 'Bonsai download'
     } else {
         Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $partial
     }
-    Assert-Hash $partial $Hash
+    # A corrupt partial file would otherwise be resumed and fail forever.
+    try { Assert-Hash $partial $Hash }
+    catch { Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue; throw 'SHA256 mismatch after download. The damaged file was removed; run 00-install.bat again.' }
     Move-Item -LiteralPath $partial -Destination $Path
 }
 function Ensure-VcRuntime {
@@ -45,7 +57,7 @@ function Ensure-VcRuntime {
     }
     if (-not $needsInstall) { return }
     Write-Host 'Installing Microsoft Visual C++ x64 runtime. Windows may request administrator approval.'
-    $redist=Join-Path $PSScriptRoot 'downloads\vc_redist.x64.exe'
+    $redist=Join-Path $BonsaiRoot 'downloads\vc_redist.x64.exe'
     Invoke-WebRequest -UseBasicParsing -Uri 'https://aka.ms/vc14/vc_redist.x64.exe' -OutFile $redist
     $signature=Get-AuthenticodeSignature -LiteralPath $redist
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'Microsoft runtime signature verification failed.' }
@@ -75,7 +87,7 @@ function Get-BonsaiModels {
     )
 }
 function Test-BonsaiInstalled($Spec) {
-    $file=Join-Path $PSScriptRoot "models\$($Spec.File)"
+    $file=Join-Path $BonsaiRoot "models\$($Spec.File)"
     return ((Test-Path -LiteralPath $file -PathType Leaf) -and (Get-Item -LiteralPath $file).Length -eq $Spec.Size)
 }
 function Select-BonsaiModels {
@@ -127,19 +139,19 @@ function Expand-BonsaiRuntime([string]$Archive,[string]$Destination) {
     # A running CLI locks DLLs. Reuse an identical installation instead of overwriting it.
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip=[IO.Compression.ZipFile]::OpenRead($Archive)
-    $matches=$true
+    $identical=$true
     try {
         foreach ($entry in $zip.Entries) {
             if (-not $entry.Name) { continue }
             $target=Join-Path $Destination $entry.FullName
-            if (-not (Test-Path -LiteralPath $target -PathType Leaf) -or (Get-Item -LiteralPath $target).Length -ne $entry.Length) { $matches=$false; break }
+            if (-not (Test-Path -LiteralPath $target -PathType Leaf) -or (Get-Item -LiteralPath $target).Length -ne $entry.Length) { $identical=$false; break }
             $stream=$entry.Open(); $sha=[Security.Cryptography.SHA256]::Create()
             try { $expected=[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','') }
             finally { $stream.Dispose(); $sha.Dispose() }
-            if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $expected) { $matches=$false; break }
+            if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $expected) { $identical=$false; break }
         }
     } finally { $zip.Dispose() }
-    if ($matches) { Write-Host '実行環境は導入済みです（ファイル一致を確認）。'; return }
+    if ($identical) { Write-Host '実行環境は導入済みです（ファイル一致を確認）。'; return }
     try { Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force }
     catch { throw "実行環境を更新できません。起動中のCLIを終了して00-install.batを再実行してください。詳細: $($_.Exception.Message)" }
 }
